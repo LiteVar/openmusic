@@ -1,0 +1,1032 @@
+openapi: 3.1.0
+info:
+  title: OpenMusic
+  version: 1.0.0
+  description: |
+    A provider-neutral HTTP API for music generation. Submit a request, poll
+    the task, then download the generated tracks. Discover a model's supported
+    parameters and constraints before submitting a request.
+
+    Implementations choose how to run music generation. Clients use the same
+    task protocol for synchronous and asynchronous generation backends.
+  license:
+    name: MIT
+    identifier: MIT
+externalDocs:
+  description: OpenMusic source repository and documentation.
+  url: https://github.com/LiteVar/openmusic
+servers:
+  - url: http://localhost:8080
+    description: Local example. Set the base URL to your OpenMusic service.
+security:
+  - BearerAuth: []
+tags:
+  - name: Music
+    description: Music generation tasks, audio downloads, and model discovery.
+
+paths:
+  /v1/music:
+    post:
+      tags: [Music]
+      operationId: createMusicTask
+      summary: Submit a music generation task
+      description: |
+        Atomically accept a request and assign a task ID that is immediately
+        available for status queries. Validate fields, combinations, and
+        provider options against the chosen model before accepting the task.
+        Unsupported fields return 400 with code unsupported_parameter.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: |
+            Optional key scoped to the caller. For the service's documented
+            retention period, repeating the same JSON request with this key
+            returns the same task ID and its current state while the task
+            exists. Using the key with a different request returns
+            409 idempotency_conflict. A replay of a deleted task returns
+            404 task_not_found while its key is retained.
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MusicRequest'
+            examples:
+              textToMusic:
+                value:
+                  model: example/studio-v1
+                  prompt: Warm acoustic pop with a light percussion section
+              lyricsToMusic:
+                value:
+                  model: example/studio-v1
+                  prompt: A quiet acoustic ballad
+                  lyrics: "[Verse]\nLast light over the harbor\n[Chorus]\nLeave a light for me"
+                  instrumental: false
+              referenceAudio:
+                value:
+                  model: example/studio-v1
+                  prompt: A piano arrangement of the reference melody
+                  instrumental: true
+                  input_references:
+                    - type: audio_url
+                      audio_url:
+                        url: https://example.invalid/melody.wav
+                      role: melody
+      responses:
+        '202':
+          description: The task was accepted or the idempotent submission was replayed.
+          headers:
+            Location:
+              description: URL reference for the task status endpoint.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicTask'
+              example:
+                id: music_abc123
+                object: music
+                model: example/studio-v1
+                status: queued
+                progress: 0
+                created_at: 1795680000
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        default:
+          $ref: '#/components/responses/JsonError'
+      callbacks:
+        taskFinished:
+          $ref: '#/components/callbacks/TaskFinished'
+    get:
+      tags: [Music]
+      operationId: listMusicTasks
+      summary: List the caller's music generation tasks
+      description: Returns tasks newest first. Use the returned cursor to fetch the next page.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum tasks in one page. The service uses 20 when omitted.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          description: Opaque next_cursor from the preceding page.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: A page of tasks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicTaskList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/JsonError'
+  /v1/music/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Music]
+      operationId: getMusicTask
+      summary: Get a music generation task
+      description: Returns the latest task state, including results on successful completion.
+      responses:
+        '200':
+          description: The task as observed by the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicTask'
+              examples:
+                running:
+                  value:
+                    id: music_abc123
+                    object: music
+                    model: example/studio-v1
+                    status: in_progress
+                    progress: null
+                    created_at: 1795680000
+                completed:
+                  value:
+                    id: music_abc123
+                    object: music
+                    model: example/studio-v1
+                    status: completed
+                    progress: 100
+                    created_at: 1795680000
+                    completed_at: 1795680060
+                    data:
+                      - id: track_abc123
+                        title: Harbor Lights
+                        duration: 120.5
+                        audio_url: /v1/music/music_abc123/content?track_id=track_abc123
+                        format: mp3
+                        sample_rate: 44100
+                        bitrate: 320000
+                        channels: 2
+                    usage:
+                      generated_tracks: 1
+                      generated_seconds: 120.5
+                failed:
+                  value:
+                    id: music_abc123
+                    object: music
+                    model: example/studio-v1
+                    status: failed
+                    created_at: 1795680000
+                    error:
+                      code: generation_failed
+                      message: Music generation failed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/JsonError'
+    delete:
+      tags: [Music]
+      operationId: deleteMusicTask
+      summary: Delete a terminal task and its audio
+      description: |
+        Delete a completed, failed, or cancelled task and revoke access to its
+        generated files. An active task returns 409 task_not_terminal.
+      responses:
+        '204':
+          description: The task was deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/JsonError'
+  /v1/music/{id}/content:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Music]
+      operationId: downloadMusicTrack
+      summary: Download the raw audio of a generated track
+      description: |
+        Fetch a generated track using the task owner's bearer token.
+        A single-track task can omit track_id. A multi-track task requires
+        it and otherwise returns 400 track_id_required. The binary response
+        uses the actual audio media type where known.
+      parameters:
+        - name: track_id
+          in: query
+          description: Track ID from the completed task. Required for multiple tracks.
+          schema:
+            $ref: '#/components/schemas/TrackId'
+      responses:
+        '200':
+          description: Raw audio bytes.
+          content:
+            audio/*: {}
+            application/octet-stream: {}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '410':
+          description: The audio expired. Error code content_expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        default:
+          $ref: '#/components/responses/JsonError'
+  /v1/music/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    post:
+      tags: [Music]
+      operationId: cancelMusicTask
+      summary: Cancel a queued or running task
+      description: |
+        Success means cancellation has taken effect. An already cancelled
+        task also returns 200. Return 409 cancellation_unsupported when the
+        task cannot be cancelled by its model or backend. A completed or
+        failed task returns 409 task_not_cancellable.
+      responses:
+        '200':
+          description: The task has status cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicTask'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/JsonError'
+  /v1/music/models:
+    get:
+      tags: [Music]
+      operationId: listMusicModels
+      summary: List available music models and their capabilities
+      responses:
+        '200':
+          description: Music models currently available to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicModelList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/JsonError'
+  /v1/music/models/{model_id}:
+    get:
+      tags: [Music]
+      operationId: getMusicModel
+      summary: Get a music model's capabilities
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          description: |
+            Pass the original model ID to an SDK. On the wire the entire ID
+            is one percent-encoded path segment. For example, the ID
+            example/studio-v1 is sent as example%2Fstudio-v1. The service
+            decodes the matched segment exactly once before looking up the ID.
+          schema:
+            type: string
+            minLength: 1
+          example: example/studio-v1
+      responses:
+        '200':
+          description: The model and its capabilities. The example describes a fictional model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MusicModel'
+              example:
+                id: example/studio-v1
+                object: model
+                name: Studio v1
+                type: music
+                supported_parameters: [prompt, lyrics, duration, instrumental, input_references]
+                capabilities:
+                  prompt:
+                    type: string
+                    support: native
+                    max_length: 1000
+                  lyrics:
+                    type: string
+                    support: native
+                  duration:
+                    type: number
+                    support: native
+                    unit: seconds
+                    min: 10
+                    max: 240
+                    default_value:
+                      number: 60
+                  instrumental:
+                    type: boolean
+                    support: native
+                    default_value:
+                      boolean: false
+                  input_references:
+                    type: array
+                    support: native
+                    roles: [melody]
+                    max_items: 1
+                    media_types: [audio/wav, audio/mpeg]
+                constraints:
+                  - when:
+                      - parameter: instrumental
+                        operator: equals
+                        value:
+                          boolean: true
+                    require: [prompt]
+                features:
+                  text_to_music: true
+                  lyrics_to_music: true
+                  instrumental: true
+                  reference_audio: true
+                  continuation: false
+                  cancellation: false
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/JsonError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: A token issued by the OpenMusic service.
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: Opaque task ID returned by task creation.
+      schema:
+        $ref: '#/components/schemas/TaskId'
+  responses:
+    InvalidRequest:
+      description: |
+        Invalid JSON, invalid or unsupported parameters, or a parameter
+        conflict. Use invalid_request for malformed input, unsupported_parameter
+        for a field the model cannot accept, and parameter_conflict for
+        incompatible fields.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: unsupported_parameter
+              message: This model does not support bpm
+              param: bpm
+    Unauthorized:
+      description: A bearer token is missing or invalid. Error code unauthorized.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: |
+        The requested resource does not exist or is inaccessible to the
+        caller. Use task_not_found, track_not_found, or model_not_found
+        according to the resource.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: task_not_found
+              message: Music task not found
+    Conflict:
+      description: |
+        The task state or retained idempotency key prevents the operation.
+        Downloading from an active task returns content_not_ready.
+        A task that finished without audio returns content_unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: cancellation_unsupported
+              message: This task cannot be cancelled by its backend
+    RateLimited:
+      description: The service is temporarily limiting creation requests. Error code rate_limited.
+      headers:
+        Retry-After:
+          description: Time to wait in whole seconds, when available.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    JsonError:
+      description: Error details for an unsuccessful request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  callbacks:
+    TaskFinished:
+      '{$request.body#/webhook_url}':
+        post:
+          operationId: receiveMusicTaskEvent
+          summary: Receive a terminal task event
+          description: |
+            When webhook_url is present, the service sends an event for a
+            completed, failed, or cancelled task. Retries of the same event
+            use the same event ID. A receiver deduplicates by event ID and
+            acknowledges successful delivery with a 2xx response.
+          security: []
+          parameters:
+            - name: OpenMusic-Webhook-Signature
+              in: header
+              required: true
+              description: |
+                A comma-separated t=<unix-seconds>,v1=<lowercase hex digest>.
+                The digest is HMAC-SHA256 over the ASCII timestamp, a period,
+                and the raw request body bytes, in that order. The service
+                provisions the webhook secret separately. Receivers verify
+                the digest and enforce a timestamp tolerance before handling
+                the event.
+              schema:
+                type: string
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/MusicTaskEvent'
+                example:
+                  id: event_abc123
+                  type: music.task.finished
+                  created_at: 1795680060
+                  data:
+                    id: music_abc123
+                    object: music
+                    model: example/studio-v1
+                    status: failed
+                    created_at: 1795680000
+                    error:
+                      code: generation_failed
+                      message: Music generation failed
+          responses:
+            '2XX':
+              description: The receiver acknowledged the event.
+  schemas:
+    TaskId:
+      type: string
+      pattern: '^music_[A-Za-z0-9_-]+$'
+    TrackId:
+      type: string
+      pattern: '^track_[A-Za-z0-9_-]+$'
+    MusicRequest:
+      type: object
+      additionalProperties: false
+      required: [model]
+      description: |
+        Model capabilities define which optional fields can be used together,
+        their allowed values, and any defaults. Nonempty lyrics with
+        instrumental set to true return 400 parameter_conflict.
+      properties:
+        model:
+          type: string
+          minLength: 1
+          description: Model ID returned by model discovery.
+        prompt:
+          type: string
+          description: The style, mood, instruments, or creative direction.
+        lyrics:
+          type: string
+          description: The verbatim lyrics the caller wants sung.
+        title:
+          type: string
+          description: Requested track title.
+        negative_prompt:
+          type: string
+          description: Musical features to avoid.
+        duration:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+          description: Target audio duration in seconds. Measured duration can differ.
+        instrumental:
+          type: boolean
+          description: True requests music without sung vocals. False allows vocals.
+        bpm:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+          description: Target tempo in beats per minute.
+        key:
+          type: string
+          description: Musical key, such as C major.
+        time_signature:
+          type: string
+          description: Meter, such as 4/4.
+        genre:
+          type: array
+          items:
+            type: string
+          description: Requested genres.
+        style:
+          type: array
+          items:
+            type: string
+          description: Requested style descriptors.
+        language:
+          type: string
+          description: Language of the lyrics, written as a BCP 47 language tag.
+        seed:
+          type: integer
+          format: int64
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+          description: Random seed when supported. Reproducibility is model-specific.
+        n:
+          type: integer
+          minimum: 1
+          description: Requested number of generated tracks.
+        output_format:
+          type: string
+          description: Requested audio format, such as mp3, wav, or flac.
+        sample_rate:
+          type: integer
+          minimum: 1
+          description: Requested sample rate in Hz.
+        bitrate:
+          type: integer
+          minimum: 1
+          description: Requested bitrate in bits per second.
+        input_references:
+          type: array
+          items:
+            $ref: '#/components/schemas/AudioReference'
+        provider:
+          $ref: '#/components/schemas/ProviderExtensions'
+        webhook_url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          description: |
+            Optional HTTPS callback URL for terminal task events. Use only
+            when the model's features include webhooks. Services validate
+            callback destinations and enforce redirect and timeout limits.
+    AudioReference:
+      type: object
+      additionalProperties: false
+      required: [type, audio_url, role]
+      properties:
+        type:
+          type: string
+          enum: [audio_url]
+        audio_url:
+          $ref: '#/components/schemas/AudioReferenceUrl'
+        role:
+          $ref: '#/components/schemas/AudioReferenceRole'
+    AudioReferenceUrl:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          minLength: 1
+          pattern: '^(https?://|data:audio/)'
+          description: |
+            HTTP(S) URL or a Base64 audio data URL, as accepted by the model.
+            Services fetching URLs validate destinations and redirects and
+            enforce time, size, and media-type limits.
+    AudioReferenceRole:
+      type: string
+      enum: [melody, rhythm, style, voice, composition, continuation]
+    ProviderExtensions:
+      type: object
+      additionalProperties: false
+      properties:
+        options:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: true
+          description: |
+            Provider name to option object. The selected model's
+            provider_options advertises permitted names and values.
+            The service rejects unadvertised providers and option keys.
+          example:
+            example:
+              guidance_scale: 4.5
+    MusicTaskStatus:
+      type: string
+      enum: [queued, in_progress, completed, failed, cancelled]
+      description: |
+        Queued tasks can start, fail, or be cancelled. Running tasks can
+        complete, fail, or be cancelled. Completed, failed, and cancelled
+        are terminal states.
+    MusicTask:
+      type: object
+      required: [id, object, model, status, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/TaskId'
+        object:
+          type: string
+          enum: [music]
+        model:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/MusicTaskStatus'
+        progress:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 100
+          description: Real percentage when available. Null or omission means unknown.
+        created_at:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Creation time in Unix seconds.
+        completed_at:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Required when status is completed. Unix seconds.
+        data:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MusicTrack'
+          description: Generated tracks. Required when status is completed.
+        usage:
+          $ref: '#/components/schemas/GenerationUsage'
+        error:
+          $ref: '#/components/schemas/ApiError'
+          description: Required when status is failed.
+    MusicTrack:
+      type: object
+      required: [id, audio_url]
+      description: |
+        Metadata reported by the generation backend or measured from the
+        output file. Optional metadata is omitted when unavailable.
+      properties:
+        id:
+          $ref: '#/components/schemas/TrackId'
+        audio_url:
+          type: string
+          minLength: 1
+          description: |
+            Same-service audio URL reference for this track. Resolve it
+            against the service origin and authenticate the download with
+            the same bearer token used for the task.
+        audio_expires_at:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Expiration in Unix seconds, where applicable.
+        title:
+          type: string
+        duration:
+          type: number
+          format: double
+          minimum: 0
+          description: Actual duration in seconds.
+        cover_url:
+          type: string
+          description: URL reference for cover artwork when available.
+        lyrics:
+          type: string
+        format:
+          type: string
+        sample_rate:
+          type: integer
+          minimum: 1
+          description: Actual sample rate in Hz.
+        bitrate:
+          type: integer
+          minimum: 1
+          description: Actual bitrate in bits per second.
+        channels:
+          type: integer
+          minimum: 1
+    GenerationUsage:
+      type: object
+      description: Observed totals for the completed task.
+      required: [generated_tracks]
+      properties:
+        generated_tracks:
+          type: integer
+          minimum: 1
+        generated_seconds:
+          type: number
+          format: double
+          minimum: 0
+          description: Total duration when the duration of every generated track is known.
+    MusicTaskList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MusicTask'
+        next_cursor:
+          type: string
+          minLength: 1
+          description: Opaque pagination cursor. Omitted on the last page.
+    MusicTaskEvent:
+      type: object
+      required: [id, type, created_at, data]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: Stable identifier for deduplication across deliveries of the event.
+        type:
+          type: string
+          enum: [music.task.finished]
+        created_at:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Event creation time in Unix seconds.
+        data:
+          $ref: '#/components/schemas/MusicTask'
+          description: Task in a terminal state.
+    MusicModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MusicModel'
+    MusicModel:
+      type: object
+      required: [id, object, name, type, supported_parameters, capabilities, features]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        object:
+          type: string
+          enum: [model]
+        name:
+          type: string
+        type:
+          type: string
+          enum: [music]
+        supported_parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/MusicParameter'
+          description: Common fields with a support level other than unsupported.
+        capabilities:
+          type: object
+          propertyNames:
+            $ref: '#/components/schemas/MusicParameter'
+          additionalProperties:
+            $ref: '#/components/schemas/ParameterCapability'
+          description: Capabilities keyed by common field name. An absent field is unsupported.
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParameterRule'
+        features:
+          $ref: '#/components/schemas/MusicModelFeatures'
+        provider_options:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ProviderOptionsCapability'
+          description: Allowed extension options keyed by provider name.
+    MusicParameter:
+      type: string
+      enum:
+        - prompt
+        - lyrics
+        - title
+        - negative_prompt
+        - duration
+        - instrumental
+        - bpm
+        - key
+        - time_signature
+        - genre
+        - style
+        - language
+        - seed
+        - n
+        - output_format
+        - sample_rate
+        - bitrate
+        - input_references
+        - webhook_url
+    MusicModelFeatures:
+      type: object
+      description: Feature flags. Omitted flags are false.
+      properties:
+        text_to_music:
+          type: boolean
+        lyrics_to_music:
+          type: boolean
+        instrumental:
+          type: boolean
+        reference_audio:
+          type: boolean
+        continuation:
+          type: boolean
+        cancellation:
+          type: boolean
+        webhooks:
+          type: boolean
+        streaming:
+          type: boolean
+          description: The service offers an independently documented streaming extension.
+    ParameterSupport:
+      type: string
+      enum: [native, prompt, postprocess, unsupported]
+      description: |
+        Native maps to an upstream parameter. Prompt expresses an
+        approximate control in the generation prompt. Postprocess applies an
+        audio transformation after generation. Unsupported rejects the field.
+    ParameterType:
+      type: string
+      enum: [string, number, integer, boolean, array, object]
+    ParameterCapability:
+      type: object
+      required: [type, support]
+      properties:
+        type:
+          $ref: '#/components/schemas/ParameterType'
+        support:
+          $ref: '#/components/schemas/ParameterSupport'
+        required:
+          type: boolean
+          description: Required for all requests to this model when true.
+        unit:
+          type: string
+        min:
+          type: number
+          format: double
+          description: Inclusive lower bound for a numeric value.
+        max:
+          type: number
+          format: double
+          description: Inclusive upper bound for a numeric value.
+        min_length:
+          type: integer
+          minimum: 0
+        max_length:
+          type: integer
+          minimum: 0
+        default_value:
+          $ref: '#/components/schemas/CapabilityValue'
+        allowed_values:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/CapabilityValue'
+        max_items:
+          type: integer
+          minimum: 0
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AudioReferenceRole'
+        media_types:
+          type: array
+          items:
+            type: string
+          description: Accepted media types for each reference.
+        max_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Maximum decoded bytes per reference.
+    CapabilityValue:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      maxProperties: 1
+      description: |
+        Typed default, allowed value, or comparison operand. Send exactly one
+        field. Use number for integer and decimal values and strings for a
+        string array.
+      properties:
+        string:
+          type: string
+        number:
+          type: number
+          format: double
+        boolean:
+          type: boolean
+        strings:
+          type: array
+          items:
+            type: string
+    ParameterRule:
+      type: object
+      required: [when]
+      description: |
+        Apply require and forbid when every condition matches. Use one rule
+        per alternative condition group. Each rule provides at least one of
+        require or forbid.
+      properties:
+        when:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ParameterCondition'
+        require:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MusicParameter'
+        forbid:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MusicParameter'
+    ParameterCondition:
+      type: object
+      required: [parameter, operator]
+      description: Evaluate against explicitly supplied request fields, before defaults.
+      properties:
+        parameter:
+          $ref: '#/components/schemas/MusicParameter'
+        operator:
+          type: string
+          enum: [present, absent, equals, not_equals]
+          description: Equals and not_equals match only when the field is explicitly supplied.
+        value:
+          $ref: '#/components/schemas/CapabilityValue'
+          description: Required for equals and not_equals. Omit for present and absent.
+    ProviderOptionsCapability:
+      type: object
+      required: [options]
+      properties:
+        options:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ParameterCapability'
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ApiError'
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        message:
+          type: string
+          description: Human-readable description.
+        param:
+          type: string
+          description: Relevant field path when the error applies to a parameter.

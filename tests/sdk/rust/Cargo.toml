@@ -1,0 +1,10 @@
+[package]
+name = "openmusic_sdk_smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+openmusic_sdk = { path = "../../../sdk/rust" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
