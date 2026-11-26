@@ -104,6 +104,7 @@ def prepare_python(package, repository):
 
 
 def prepare_dart(package, repository):
+    shutil.copyfile(ROOT / "CHANGELOG.md", package / "CHANGELOG.md")
     manifest = package / "pubspec.yaml"
     replace_once(manifest, "homepage: homepage\n", f"repository: {repository}\n")
     replace_once(manifest, "sdk: '>=3.5.0 <4.0.0'", "sdk: '>=3.9.0 <4.0.0'")

@@ -69,7 +69,7 @@ def pack_python(work, output, env):
 def pack_dart(output):
     archive = output / f"openmusic_sdk-{SDK_VERSION}-dart.tar.gz"
     with tarfile.open(archive, "w:gz") as package:
-        for name in ("pubspec.yaml", "README.md", "LICENSE", "analysis_options.yaml", "build.yaml", "lib"):
+        for name in ("pubspec.yaml", "README.md", "CHANGELOG.md", "LICENSE", "analysis_options.yaml", "build.yaml", "lib"):
             package.add(SDK / "dart" / name, arcname=name)
 
 

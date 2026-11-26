@@ -6,6 +6,43 @@ OpenMusic 定义面向不同音乐生成模型的 HTTP API。客户端可以发�
 
 [openapi.yaml](openapi.yaml) 是 OpenAPI 3.1 协议文件。请求使用 JSON 和 Bearer 认证。下载接口返回原始音频。
 
+## 快速上手
+
+使用支持 OpenMusic v1 的服务地址和该服务签发的 Bearer Token。如果接口地址是 `https://music.example.com/v1/music`，基础地址应设为 `https://music.example.com`。
+
+```sh
+export OPENMUSIC_BASE_URL='https://music.example.com'
+export OPENMUSIC_TOKEN='your-service-token'
+```
+
+首次运行时留空 `OPENMUSIC_MODEL`，示例会列出模型 ID。选一个只需 `prompt` 就能生成音乐的模型，再设置它的 ID。两份示例都会提交任务、打印任务 ID、每两秒轮询一次（最多 150 次），并将第一条音轨保存到本地。
+
+### Dart
+
+在 Dart 3.9 或更新版本的项目中，将 [generate.dart](examples/dart/generate.dart) 复制为 `bin/generate.dart`，然后运行以下命令。[pub.dev 上的 openmusic_sdk 0.1.0](https://pub.dev/packages/openmusic_sdk/versions/0.1.0)
+
+```sh
+dart pub add openmusic_sdk
+dart run bin/generate.dart
+OPENMUSIC_MODEL='provider/model-id' dart run bin/generate.dart
+```
+
+示例通过 `basePathOverride` 和 `setBearerAuth` 配置 `OpenmusicSdk`。下载响应的 `data` 字段包含音频字节。
+
+### TypeScript
+
+在 Node.js 项目中，将 [generate.ts](examples/typescript/generate.ts) 复制为 `generate.ts`，然后运行以下命令。[npm 上的 openmusic-sdk 0.1.0](https://www.npmjs.com/package/openmusic-sdk/v/0.1.0)
+
+```sh
+npm install openmusic-sdk@0.1.0
+npm install --save-dev typescript @types/node
+npx tsc --strict --target ES2022 --module Node16 --types node generate.ts
+node generate.js
+OPENMUSIC_MODEL='provider/model-id' node generate.js
+```
+
+示例将 `basePath` 和 `accessToken` 传给 `Configuration`，并将下载返回的 `Blob` 写入文件。
+
 ## API
 
 | 方法 | 路径 | 用途 |
@@ -21,18 +58,9 @@ OpenMusic 定义面向不同音乐生成模型的 HTTP API。客户端可以发�
 
 把 `example/studio-v1` 这样的模型 ID 原样传给 SDK。SDK 将整个 ID 编码成一个路径段。提交前可从模型能力读取支持级别、取值范围和条件规则。启用 Webhook 的模型也可以在任务结束时向 `webhook_url` 投递签名事件。
 
-## SDK
+## Python 和 Rust
 
-| 语言 | 本地包 | 服务配置 | 下载返回值 |
-| --- | --- | --- | --- |
-| TypeScript | [openmusic-sdk](sdk/typescript) | `Configuration` 的 `basePath` 和 `accessToken` | `Blob` |
-| Python | [openmusic_sdk](sdk/python) | `Configuration` 的 `host` 和 `access_token` | `bytes` |
-| Dart | [openmusic_sdk](sdk/dart) | `OpenmusicSdk(basePathOverride: …)` 和 `setBearerAuth('BearerAuth', token)` | `Response<Uint8List>` |
-| Rust | [openmusic_sdk](sdk/rust) | `Configuration` 的 `base_path` 和 `bearer_access_token` | `reqwest::Response`，用 `bytes()` 读取 |
-
-TypeScript 包可在 `sdk/typescript` 目录内用 `npm install` 和 `npm pack` 打包。Python 包可用 `python -m pip install ./sdk/python` 安装。Dart 和 Rust 可在各自的包清单中声明本地路径依赖。
-
-[客户端示例](tests/sdk) 使用本地测试服务，演示四种语言的配置、模型查询、提交、轮询和下载。
+[Python](sdk/python) 和 [Rust](sdk/rust) SDK 当前可从仓库获取源码，包仓库发布安排在后续。[SDK 集成测试](tests/sdk) 展示了两种客户端的配置和调用方式。
 
 ## 重新生成与验证
 

@@ -6,6 +6,43 @@ OpenMusic defines an HTTP API for music generation across models. Clients can di
 
 [openapi.yaml](openapi.yaml) is the OpenAPI 3.1 contract. Clients submit JSON requests and authenticate with a bearer token. Downloads return raw audio bytes.
 
+## Quickstart
+
+Use the base URL and bearer token for a service that implements OpenMusic v1. For a service that exposes `https://music.example.com/v1/music`, set the base URL to `https://music.example.com`.
+
+```sh
+export OPENMUSIC_BASE_URL='https://music.example.com'
+export OPENMUSIC_TOKEN='your-service-token'
+```
+
+Leave `OPENMUSIC_MODEL` unset to list model IDs. Then set it to the ID of a model that accepts a prompt on its own. Both examples submit a music task, print its ID, poll up to 150 times at two-second intervals, and save the first generated track to a local file.
+
+### Dart
+
+In a Dart 3.9 or later project, copy [generate.dart](examples/dart/generate.dart) to `bin/generate.dart` and run the following commands. [openmusic_sdk 0.1.0 on pub.dev](https://pub.dev/packages/openmusic_sdk/versions/0.1.0)
+
+```sh
+dart pub add openmusic_sdk
+dart run bin/generate.dart
+OPENMUSIC_MODEL='provider/model-id' dart run bin/generate.dart
+```
+
+The example configures `OpenmusicSdk` with `basePathOverride` and `setBearerAuth`. The download response's `data` field holds the audio bytes.
+
+### TypeScript
+
+In a Node.js project, copy [generate.ts](examples/typescript/generate.ts) to `generate.ts` and run the following commands. [openmusic-sdk 0.1.0 on npm](https://www.npmjs.com/package/openmusic-sdk/v/0.1.0)
+
+```sh
+npm install openmusic-sdk@0.1.0
+npm install --save-dev typescript @types/node
+npx tsc --strict --target ES2022 --module Node16 --types node generate.ts
+node generate.js
+OPENMUSIC_MODEL='provider/model-id' node generate.js
+```
+
+The example passes `basePath` and `accessToken` to `Configuration` and uses the downloaded `Blob` to write the file.
+
 ## API
 
 | Method | Path | Purpose |
@@ -21,18 +58,9 @@ OpenMusic defines an HTTP API for music generation across models. Clients can di
 
 Pass model IDs such as `example/studio-v1` directly to the SDK. The SDK encodes the entire ID as one URL path segment. Before submitting a request, check the model's support levels, value ranges, and conditional requirements. For models with webhook support, the service can send a signed event to `webhook_url` when a task reaches a terminal state.
 
-## SDKs
+## Python and Rust
 
-| Language | Local package | Service configuration | Download return type |
-| --- | --- | --- | --- |
-| TypeScript | [openmusic-sdk](sdk/typescript) | `basePath` and `accessToken` on `Configuration` | `Blob` |
-| Python | [openmusic_sdk](sdk/python) | `host` and `access_token` on `Configuration` | `bytes` |
-| Dart | [openmusic_sdk](sdk/dart) | `OpenmusicSdk(basePathOverride: …)` and `setBearerAuth('BearerAuth', token)` | `Response<Uint8List>` |
-| Rust | [openmusic_sdk](sdk/rust) | `base_path` and `bearer_access_token` on `Configuration` | `reqwest::Response` with `bytes()` to read the body |
-
-To package the TypeScript SDK, run `npm install` and `npm pack` in `sdk/typescript`. Install the Python SDK with `python -m pip install ./sdk/python`. For Dart and Rust, declare a local path dependency in your package manifest.
-
-The [client examples](tests/sdk) use a local test service to demonstrate configuration, model discovery, task submission, polling, and downloading in all four languages.
+The [Python](sdk/python) and [Rust](sdk/rust) SDKs are available from this repository as source packages. Registry releases will follow. The [SDK integration tests](tests/sdk) show how to configure and call both clients.
 
 ## Regenerate and verify
 
